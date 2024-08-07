@@ -1,6 +1,10 @@
 <?php
 /* Small DataBase Handler */
 
+/**
+ * База данных исправлена под php 8, так как имела много ворнингов и были ошибки
+ */
+
 /* Root exception class for sdbh */
 class sdbh_exception extends Exception {
 }
@@ -16,14 +20,27 @@ class sdbh_lost_connection_exception extends sdbh_exception {
 class sdbh_tables_exception extends sdbh_exception {
 }
 
+class sdbh_dead_replicas extends sdbh_exception {
+}
+
 class sdbh {
+	private $port;
+	private $host;
+	private $dbname;
+	private $user;
+	private $pass;
+	private $sql_read;
+	private $sql_write;
+	private $sql;
+
 	function __construct($force_master = false){
 		$this->port = 3306;
-		$this -> host = 'localhost';
-		$this -> dbname = 'test_a25';
-		$this -> user = 'root';
-		$this -> pass = '';
+		$this -> host = '31.31.198.99';
+		$this -> dbname = 'u1947760_a25';
+		$this -> user = 'u1947760_a25';
+		$this -> pass = 'oE6rV2cO7zjC0kU5';
 		$mysql_conn = mysqli_connect($this -> host, $this -> user, $this -> pass, $this -> dbname, $this->port);
+		mysqli_set_charset($mysql_conn, "utf8");
 	
 		$this -> sql_read = $mysql_conn;
 		$this -> sql_write = false;
@@ -47,10 +64,10 @@ class sdbh {
 	
 	/**
 	 * Query function, throwing exceptions on errors
-	 * @param query - query string 
-	 * @return query result from mysqli query() function
-	 * @throw sdbh_deadlock_exception in case of innodb deadlock
-	 * @throw sdbh_exception in case of other query errors
+	 * @param $query - query string 
+	 * @return mysqli_result result from mysqli query() function
+	 * @throws sdbh_deadlock_exception in case of innodb deadlock
+	 * @throws sdbh_exception in case of other query errors
 	 */
 	public function query_exc($query){
 	
@@ -111,12 +128,12 @@ class sdbh {
 	/**
 	 * Old, compatibility function to execute plain-text queries in
 	 * deadlock-safe manner.
-	 * @param query - query text
-	 * @return many interesting things :)
+	 * @param $query - query text
+	 * @return string|array|int interesting things :)
 	 */
-	public function make_query($query, $reconnect = false){
+	public function make_query($query){
 		$this -> sql = $this -> get_connection($query);
-		$r=$this->query_ds_exc($query, $reconnect);
+		$r=$this->query_ds_exc($query);
 		if(mysqli_errno($this->sql)){ return mysqli_error($this->sql);
 		}elseif(stristr(substr($query,0,10),'select')!==false){return $this->get_all_assoc($r);}
 		return mysqli_affected_rows($this->sql);
@@ -192,7 +209,7 @@ class sdbh {
 	 * @param $update_array - array("field" => new_value)
 	 * @param $select_array - array("field" => conditional_value)
 	 * @param $deadlock_up - raise exception on deadlock or automatically restart
-	 * @return mysqli affected rows
+	 * @return int|string affected rows
 	 */
 	function update_rows(
 		$tbl_name,
@@ -232,7 +249,7 @@ class sdbh {
 	 * @param $order - "DESC" or Null
 	 * @param $deadlock_up - throw deadlock_exception out or restart query internaly
 	 * @param $lock_mode - LISH - LOCK IN SHARE MODE, FU - FOR UPDATE or Null - nothing
-	 * @return query result as array of rows, each an associative array
+	 * @return array result as array of rows, each an associative array
 	 */
 	public function mselect_rows(
 		$tbl_name,
@@ -279,7 +296,7 @@ class sdbh {
 	 * @param $tbl_name - table name
 	 * @param $delete_array - array of key => value conditions
 	 * @param $deadlock_up - throw deadlock exception or restart query automatically
-	 * @return affected rows
+	 * @return int|string rows
 	 */
 	function delete_rows($tbl_name, $delete_array, $deadlock_up = False){
 		while(True) try{
@@ -301,7 +318,7 @@ class sdbh {
 	 * Inserts a set of rows into a table, ignoring failures
 	 * @param $tbl_name - table name
 	 * @param $rows - array of associative arrays like ("column" => "value"), keys are obtained from the first record
-	 * @param deadlock_up - throw deadlock exception or restart query automatically
+	 * @param $deadlock_up - throw deadlock exception or restart query automatically
 	 * @return number of rows inserted
 	 */
 	function insert_rows($tbl_name, $rows, $deadlock_up = False){
@@ -372,7 +389,7 @@ class sdbh {
 	 * @param $tbl_name - table name to select from
 	 * @param $username - user name (seriously!). Restarts transaction in case
 	 * of a deadlock.
-	 * @return associative array with user row data
+	 * @return array|bool array with user row data
 	 */
 	public function get_user($tbl_name, $username){
 		while(True) try{
@@ -386,7 +403,7 @@ class sdbh {
 			continue;
 		}
 		if(empty($qq[0])){
-			return False;
+			return false;
 		}else{
 			return $qq[0];
 		}
@@ -396,8 +413,8 @@ class sdbh {
 	 * Counts rows in a table, matching specified condition
 	 * @param $tbl_name - table name
 	 * @param $select array - array like (field => value) with select conditions
-	 * @param deadlock_up - push deadlock exception out or restart silently
-	 * @return number of matching rows inside array('0' => array(0 => N))
+	 * @param $deadlock_up - push deadlock exception out or restart silently
+	 * @return array of matching rows inside array('0' => array(0 => N))
 	 * for historical reasons
 	 */
 	public function count_rows($tbl_name, $select_array, $deadlock_up = False){
@@ -420,15 +437,15 @@ class sdbh {
 	/**
 	 * Inserts a row into database, automatically restarting deadlocks.
 	 * @param $tbl_name - target table name
-	 * @param insert array - array of fields and values
-	 * @return insert_id or false
+	 * @param $insert_array - array of fields and values
+	 * @return int|string|bool or false
 	 */
 	public function insert_row($tbl_name, $insert_array){
 		$N = $this -> insert_rows($tbl_name, array($insert_array));
 		if($N){
 			return $this -> sql -> insert_id;
 		}else{
-			return False;
+			return false;
 		}
 	}
 	
